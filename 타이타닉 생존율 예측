@@ -1,0 +1,304 @@
+#패키지 준비
+from pandas import read_excel
+from pandas import merge
+from pandas import cut
+from pandas import DataFrame
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+from sklearn.model_selection import train_test_split
+
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.callbacks import ReduceLROnPlateau
+from tensorflow.keras.callbacks import ModelCheckpoint
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import confusion_matrix
+
+#데이터셋 준비
+df = read_excel("http://itpaper.co.kr/data/titanic.xlsx", engine='openpyxl')
+df
+
+#데이터 전처리
+#결측치 확인
+df.isna().sum()
+
+#결측치 제거 -Cabin 컬럼
+# Cabin 컬럼 제거
+if 'Cabin' in df.columns: df.drop('Cabin', axis=1, inplace=True)
+df.isna().sum()
+
+#결측치 제거 - Embarked 컬럼 최빈값 대체
+most_frequent = df['Embarked'].mode()
+print(most_frequent[0])
+df['Embarked'].fillna(most_frequent[0], inplace=True)
+df.isna().sum()
+
+#결측치 제거 - Age 컬럼 중앙값 대체
+df['Age'].fillna(df['Age'].median(), inplace=True)
+df.isna().sum()
+
+#인덱스 설정
+if 'PassengerId' in df.columns: df.set_index('PassengerId', inplace=True)
+df
+
+#컬럼 정보 확인
+df.info()
+
+#범주형 변수 타입 변환 
+df['Sex'] = df['Sex'].astype('category').cat.rename_categories({'male':1, 'female':0})
+df['Survived'] = df['Survived'].astype('category')
+df['Pclass'] = df['Pclass'].astype('category').cat.reorder_categories([1,2,3])
+df['Embarked'] = df['Embarked'].astype('category').cat.rename_categories({'S':1, 'C':2, 'Q':3})
+df.info()
+
+#탐색적 데이터 분석
+#데이터 요약 정보 확인
+df.describe()
+
+#생존률 시각화
+plt.rcParams["font.family"] = 'NanumGothic'
+plt.rcParams["font.size"] = 20
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 10), dpi=100)
+
+vc = df['Survived'].value_counts()
+ax1.pie(vc, labels=vc.index, explode=[0,0.1],autopct='%1.2f%%')
+ax1.set_title('Survived')
+ax1.set_ylabel('')
+
+sns.countplot(x=df['Survived'], ax=ax2)
+ax2.set_title('Survived')
+plt.show()
+
+#선실의 등급별 생존률 상황
+pclass_total_df = df.filter(['Pclass', 'Survived']).groupby('Pclass').count()
+pclass_total_df
+
+pclass_surv_df = df.filter(['Pclass', 'Survived']).query('Survived==1').groupby('Pclass').count()
+pclass_surv_df
+
+pclass_df = merge(pclass_total_df, pclass_surv_df, left_index=True, right_index=True)
+pclass_df
+
+pclass_df.rename(columns={'Survived_x': 'total', 'Survived_y': 'survived'}, inplace=True)
+pclass_df['ratio'] = pclass_df['survived'] / pclass_df['total']
+pclass_df
+
+fig, ax = plt.subplots(1, 1, figsize=(15, 8))
+sns.barplot(x=pclass_df.index, y='ratio', data=pclass_df, ax=ax)
+ax.grid()
+ax.set_ylabel('survived')
+plt.show()
+plt.close()
+
+#연령별 분포
+plt.rcParams["figure.figsize"] = (16, 8)
+plt.rcParams["font.size"] = 14
+
+sns.kdeplot(data=df, x='Age', fill=True, alpha=0.4, linewidth=0.5)
+plt.grid()
+plt.show()
+
+#생존 여부에 따른 연령 분포 곡선
+plt.rcParams["font.family"] = 'NanumGothic'
+plt.rcParams["font.size"] = 20
+
+f, ax = plt.subplots(1, 1, figsize=(15, 8))
+
+# 첫 번째 그래프를 생성
+sns.kdeplot(df["Age"][(df["Survived"] == 0)], ax=ax, color="Blue", shade = True)
+
+# 첫 번째 그래프에 새로운 그래프를 덧그림
+sns.kdeplot(df["Age"][(df["Survived"] == 1)], ax=ax, color="Green", shade= True)
+
+ax.set_xlabel("Age")
+ax.set_ylabel("Frequency")
+ax.legend(["Not Survived","Survived"])
+
+plt.show()
+
+plt.rcParams["figure.figsize"] = (15, 7)
+plt.rcParams["font.family"] = 'NanumGothic'
+sns.scatterplot(data=df, x='Age', y='Fare', hue='Survived')
+plt.grid()
+plt.show()
+
+#성별 생존률 비율
+plt.rcParams["font.size"] = 16
+plt.rcParams["font.family"] = 'NanumGothic'
+
+f,ax=plt.subplots(1,2, figsize=(15, 8))
+
+sns.countplot(x='Sex',data=df, ax=ax[0])
+ax[0].set_title('탑승자 성별 비율')
+
+sns.countplot(x='Sex',hue='Survived', data=df, ax=ax[1])
+ax[1].set_title('생존여부에 따른 성별 비율')
+
+plt.show()
+plt.close()
+
+#연령층 나누기
+df['AgeCut'] = cut(df['Age'], bins=[0, 10, 20, 50, 100], include_lowest=True, labels=['baby', 'teenage', 'adult', 'old'])
+df['AgeCut']
+
+#객실, 연령층, 성별에 따른 생존률 시각화
+plt.rcParams["font.size"] = 20
+plt.rcParams["font.family"] = 'NanumGothic'
+
+fig, ax = plt.subplots(1, 3, figsize=(24, 8), dpi=100)
+plt.subplots_adjust(wspace=0.3)
+
+sns.countplot(x='Pclass', hue='Survived', data=df, ax=ax[0])
+sns.countplot(x='AgeCut', hue='Survived', data=df, ax=ax[1])
+sns.countplot(x='Sex', hue='Survived', data=df, ax=ax[2])
+
+plt.show()
+plt.close()
+
+#데이터셋 분할
+np.random.seed(777)
+
+# 생존 유무
+df['Survived'] = df['Survived'].astype(np.float32)
+# 객실 등급
+df['Pclass'] = df['Pclass'].astype(np.float32)
+# 성별
+df['Sex'] = df['Sex'].astype(np.float32)
+# 형제 혹은 부부의 수
+df['SibSp'] = df['SibSp'].astype(np.float32)
+# 부모 혹은 자녀의 수
+df['Parch'] = df['Parch'].astype(np.float32)
+# 지불한 운임
+df['Fare'] = df['Fare'].astype(np.float32)
+# 나이
+df['Age'] = df['Age'].astype(np.float32)
+# 탑승지역
+df['Embarked'] = df['Embarked'].astype(np.float32)
+
+df.info()
+
+x_data = df.filter(['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare'], axis=1)
+y_data = df.filter(['Survived'])
+
+x_train, x_test, y_train, y_test = train_test_split(x_data, y_data, test_size=0.3, random_state=777)
+x_train.info()
+
+#모델 개발
+model = Sequential()
+
+model.add(Dense(256, input_shape=(len(x_train.columns),), activation='relu'))
+model.add(Dense(128, activation='relu'))
+model.add(Dense(64, activation='relu'))
+model.add(Dense(32, activation='relu'))
+model.add(Dense(16, activation='relu'))
+
+# sigmoid --> 출력 결과가 0~1 사이 값을 갖는다. => 백분율
+model.add(Dense(1, activation='sigmoid'))
+
+model.compile(optimizer='rmsprop', loss = 'binary_crossentropy', metrics = ['acc'])
+model.summary()
+
+#학습하기
+result = model.fit(x_train, y_train, epochs = 500, validation_data = (x_test, y_test), callbacks = [
+    ModelCheckpoint(filepath = 'check_point.h5', monitor = 'val_loss', verbose=1, save_best_only = True),
+    EarlyStopping(monitor = 'val_loss', patience=5, verbose = 1),
+    ReduceLROnPlateau(monitor= "val_loss", patience=3, factor = 0.5, min_lr=0.0001, verbose=1)
+])
+
+result_df = DataFrame(result.history)
+result_df['epochs'] = result_df.index+1
+result_df.set_index('epochs', inplace=True)
+result_df
+
+#학습 결과 평가
+evaluate = model.evaluate(x_train, y_train)
+print("최종 손실률: %f, 최종 정확도: %f" % (evaluate[0], evaluate[1]))
+
+#학습 결과 시각화
+# 그래프 기본 설정
+# ----------------------------------------
+plt.rcParams["font.family"] = 'Malgun Gothic'
+plt.rcParams["font.size"] = 16
+plt.rcParams['axes.unicode_minus'] = False
+
+# 그래프를 그리기 위한 객체 생성
+# ----------------------------------------
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 5), dpi=150)
+
+# 1) 훈련 및 검증 손실 그리기
+# ----------------------------------------
+sns.lineplot(x=result_df.index, y='loss', data=result_df, color='blue', label='훈련 손실률', ax=ax1)
+sns.lineplot(x=result_df.index, y='val_loss', data=result_df, color='orange', label='검증 손실률', ax=ax1)
+ax1.set_title('훈련 및 검증 손실률')
+ax1.set_xlabel('반복회차')
+ax1.set_ylabel('손실률')
+ax1.grid()
+ax1.legend()
+
+# 2) 훈련 및 검증 정확도 그리기
+# ----------------------------------------
+sns.lineplot(x=result_df.index, y='acc', data=result_df, color = 'blue', label = '훈련 정확도', ax=ax2)
+sns.lineplot(x=result_df.index, y='val_acc', data=result_df, color = 'orange', label = '검증 정확도', ax=ax2)
+ax2.set_title('훈련 및 검증 정확도')
+ax2.set_xlabel('반복회차')
+ax2.set_ylabel('정확도')
+ax2.grid()
+ax2.legend()
+
+plt.show()
+plt.close()
+
+#학습 결과 적용
+results = model.predict(x_test)
+data_count, case_count = results.shape
+print("%d개의 검증 데이터가 %d개의 경우의 수를 갖는다." % (data_count, case_count))
+print(results)
+
+f_results = results.flatten()
+kdf = DataFrame({
+    '결과값': y_test['Survived'],
+    '생존확률(%)': np.round(f_results * 100, 1),
+    '예측치' : np.round(f_results)
+})
+
+kdf
+
+#오차행렬
+cm = confusion_matrix(kdf['결과값'], kdf['예측치'])
+cmdf1 = DataFrame(cm, columns=['예측값(N)', '예측값(P)'], index=['실제값(F)', '실제값(T)'])
+cmdf1
+
+#오차행렬 히트맵
+plt.rcParams["font.family"] = 'Malgun Gothic'
+plt.rcParams["font.size"] = 16
+plt.rcParams["figure.figsize"] = (3, 3)
+
+# 오차 행렬을 히트맵 그래프로 표현
+# -> annot : 그래프의 각 칸에 수치값 출력
+# -> fmt : 수치값 출력 format (여기서는 10진수)
+# -> cmap : 색상맵 (<https://matplotlib.org/3.2.1/tutorials/colors/colormaps.html>)
+sns.heatmap(cm, annot = True, fmt = 'd',cmap = 'Blues')
+plt.xlabel('예측값')
+plt.ylabel('결과값')
+plt.show()
+
+x = (cmdf1['예측값(P)']['실제값(T)']+cmdf1['예측값(N)']['실제값(F)']) / len(y_test) * 100
+print('머신러닝 분류 정확도 : %0.2f%%' % (x))
+
+#결과 적용
+dicaprio = np.array([3., 1., 19., 0., 0., 5.]).reshape(1,6)
+results = model.predict(dicaprio)
+results
+
+winslet = np.array([1., 0., 17., 1., 2., 100.]).reshape(1,6)
+results = model.predict(winslet)
+results
+
+leekh = np.array([2., 1., 40., 1., 0., 50.]).reshape(1,6)
+results = model.predict(leekh)
+results
